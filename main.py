@@ -1,11 +1,17 @@
 from fastapi import FastAPI, HTTPException
+from database import init_db, get_db 
+import sqlite3
 from pydantic import BaseModel
 
 app = FastAPI()
 
+@app.on_event("startup")
+def startup():
+    init_db() 
+
 # Ye humari khali to-do list hai
-tasks = []
-next_id = 1
+# tasks = []
+# next_id = 1
 
 class Task(BaseModel):
     id: int
@@ -23,28 +29,60 @@ def ghar():
 def health():
     return {"status": "ok"}
 
-@app.get("/tasks")
-def sab_tasks_dikhao():
-    return tasks
+# 1. GET ALL TASKS
+@app.get("/tasks", response_model=list[Task])
+def get_tasks():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM tasks")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
-@app.post("/tasks", status_code=201)
+# 2. GET 1 TASK
+@app.get("/tasks/{task_id}", response_model=Task)
+def get_task(task_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM tasks WHERE id =?", (task_id,))
+    row = c.fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return dict(row)
+# 3. POST - NAYA TASK BANANA
+@app.post("/tasks", response_model=Task, status_code=201)
 def naya_task_add_karo(task: TaskCreate):
-    global next_id
-    naya_task = Task(id=next_id, title=task.title)
-    tasks.append(naya_task)
-    next_id += 1
-    return naya_task
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT INTO tasks (title, done) VALUES (?,?)", (task.title, 0))
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return {"id": new_id, "title": task.title, "done": False}
 
-@app.put("/tasks/{task_id}")
-def task_complete_karo(task_id: int):
-    for task in tasks:
-        if task.id == task_id:
-            task.done = True
-            return task
-    raise HTTPException(status_code=404, detail="Task nahi mila")
+# 4. PUT - TASK UPDATE KARNA
+@app.put("/tasks/{task_id}", response_model=Task)
+def task_complete_karo(task_id: int, task: Task):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE tasks SET title =?, done =? WHERE id =?", (task.title, task.done, task_id))
+    conn.commit()
+    if c.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Task not found")
+    conn.close()
+    return {"id": task_id, "title": task.title, "done": task.done}
 
+# 5. DELETE - TASK DELETE KARNA
 @app.delete("/tasks/{task_id}", status_code=204)
 def task_delete_karo(task_id: int):
-    global tasks
-    tasks = [t for t in tasks if t.id != task_id]
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE id =?", (task_id,))
+    conn.commit()
+    if c.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Task not found")
+    conn.close()
     return
